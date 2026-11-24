@@ -1,0 +1,870 @@
+-- =====================================================================
+-- DARK HUB v15 — VantixUI Edition (Clean Layout)
+-- Tabs: MAIN | COMBAT | VISUAL | WEAPON | ANTI LAG | SETTINGS
+-- =====================================================================
+local Players              = game:GetService("Players")
+local Workspace            = game:GetService("Workspace")
+local RunService           = game:GetService("RunService")
+local UserInputService     = game:GetService("UserInputService")
+local Lighting             = game:GetService("Lighting")
+local ReplicatedStorage    = game:GetService("ReplicatedStorage")
+local LocalPlayer          = Players.LocalPlayer
+local Camera               = Workspace.CurrentCamera
+
+local u_getgc       = rawget(getfenv(), "getgc")       or getgc
+local u_setreadonly = rawget(getfenv(), "setreadonly") or function() end
+
+local DISCORD_URL = "https://discord.gg/dark-hub-1427252148416024632"
+
+-- ==================== UI SETUP ====================
+local url = "https://raw.githubusercontent.com/Snipez-Dev/Vantix/refs/heads/main/VantixUI6"
+local VantixUI = loadstring(game:HttpGet(url))()
+
+local Window = VantixUI:CreateWindow({
+    Title       = "DARK HUB",
+    Theme       = "Vantix",
+    AccentColor = Color3.fromRGB(85, 130, 240),
+    LogoID      = 110034487018208,
+    Size        = {820, 480},
+})
+
+pcall(function()
+    Window:CreateTag("Premium", Color3.fromRGB(255, 180, 50), nil, "crown")
+    Window:CreateTag("v15", Color3.fromRGB(60, 120, 210), nil, "git-branch")
+    Window:CreateTag("discord.gg/dark-hub", Color3.fromRGB(88, 101, 242), nil, nil, true)
+end)
+
+Window:Notify({
+    Title = "DARK HUB",
+    Text = "v15 loaded — join discord for updates!",
+    Icon = "check",
+    Duration = 4,
+})
+
+-- ==================== TABS ====================
+local MainTab     = Window:AddTab("Main",       "layout-dashboard")
+local CombatTab   = Window:AddTab("Combat",     "crosshair")
+local VisualTab   = Window:AddTab("Visual",     "eye")
+local WeaponTab   = Window:AddTab("Weapon",     "target")
+local AntiLagTab  = Window:AddTab("Anti Lag",   "gauge")
+local SettingsTab = Window:AddTab("Settings",   "settings")
+
+-- =====================================================================
+-- SETTINGS
+-- =====================================================================
+local Settings = {
+    SilentAim = false, FOV = 120, TeamCheck = true,
+    Aimbot = false, AimbotSmooth = 5, AimbotBone = "Head",
+    AimbotRMB = false, AimbotVis = true,
+    ESP_Enabled = false, ESP_Box = false, ESP_Name = false, ESP_Health = false,
+    ESP_Distance = false, ESP_Skeleton = false, ESP_Highlight = false,
+    ESP_Tracker = false, ESP_RedDot = false, MaxESPDistance = 1500,
+    ESPColor = Color3.fromRGB(255, 140, 0),
+    InfStamina = false, SpinChar = false,
+    Noclip = false,
+    SpeedHack = false, WalkSpeed = 16,
+    NoRecoil = false, NoSpread = false,
+    PerfNuclear = false, PerfShadow = false, PerfFog = false,
+    PerfParticles = false, PerfTexture = false, PerfLights = false, PerfPlastic = false,
+}
+
+-- =====================================================================
+-- FOV CIRCLE
+-- =====================================================================
+local Circle = Drawing.new("Circle")
+Circle.Thickness = 1; Circle.Position = Camera.ViewportSize / 2
+Circle.Visible = false; Circle.Filled = false; Circle.NumSides = 64
+Circle.Radius = Settings.FOV; Circle.Color = Settings.ESPColor; Circle.Transparency = 1
+
+RunService.Heartbeat:Connect(function()
+    if not Circle then return end
+    local cam = Workspace.CurrentCamera; if not cam then return end
+    Circle.Position = cam.ViewportSize / 2
+    Circle.Visible = Settings.SilentAim or Settings.Aimbot
+    Circle.Radius = Settings.FOV; Circle.Color = Settings.ESPColor
+end)
+
+-- =====================================================================
+-- UTILITIES
+-- =====================================================================
+local function humOf(char) return char and char:FindFirstChildOfClass("Humanoid") end
+local function alive(char) local h = humOf(char); return h and h.Health > 0 end
+
+local function visibleFrom(origin, pos, char)
+    if not Settings.AimbotVis then return true end
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    local f = {}
+    if LocalPlayer.Character then table.insert(f, LocalPlayer.Character) end
+    if char then table.insert(f, char) end
+    rp.FilterDescendantsInstances = f; rp.IgnoreWater = true
+    return Workspace:Raycast(origin, pos - origin, rp) == nil
+end
+
+-- =====================================================================
+-- AIMBOT
+-- =====================================================================
+local aimHoldStart, lastAimActive = 0, false
+local function pickTarget()
+    local cam = Workspace.CurrentCamera; if not cam then return nil end
+    local center = Vector2.new(cam.ViewportSize.X * 0.5, cam.ViewportSize.Y * 0.5)
+    local best, bestD = nil, Settings.FOV
+    local origin = cam.CFrame.Position
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character and alive(p.Character) then
+            local isTeammate = false
+            if Settings.TeamCheck and p.Team and LocalPlayer.Team and p.Team == LocalPlayer.Team then isTeammate = true end
+            if not isTeammate then
+                local part = p.Character:FindFirstChild(Settings.AimbotBone) or p.Character:FindFirstChild("Head")
+                if part then
+                    local v, on = cam:WorldToViewportPoint(part.Position)
+                    if on and v.Z > 0 then
+                        local d = (Vector2.new(v.X, v.Y) - center).Magnitude
+                        if d < bestD and visibleFrom(origin, part.Position, p.Character) then
+                            bestD = d; best = part
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+RunService:BindToRenderStep("DARKHUB_Aim", Enum.RenderPriority.Camera.Value + 1, function()
+    if not Settings.Aimbot then lastAimActive = false; return end
+    if Settings.AimbotRMB and not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        lastAimActive = false; return
+    end
+    if not lastAimActive then aimHoldStart = os.clock(); lastAimActive = true end
+    local part = pickTarget(); if not part then return end
+    local cam = Workspace.CurrentCamera; if not cam then return end
+    local ramp = math.clamp((os.clock() - aimHoldStart) / 0.12, 0, 1)
+    local target = CFrame.new(cam.CFrame.Position, part.Position)
+    local step = 1 / math.max(Settings.AimbotSmooth, 1)
+    cam.CFrame = cam.CFrame:Lerp(target, math.clamp(step * ramp, 0.02, 1))
+end)
+
+-- =====================================================================
+-- SILENT AIM
+-- =====================================================================
+local ClientHitboxes
+pcall(function()
+    local Weapons = ReplicatedStorage:WaitForChild("Weapons", 5)
+    if Weapons then
+        ClientHitboxes = require(Weapons:WaitForChild("ClientHitboxes", 5))
+    end
+end)
+
+local function GetSilentAimTarget()
+    if not ClientHitboxes or not ClientHitboxes.folders then return nil end
+    local cam = Workspace.CurrentCamera; if not cam then return nil end
+    local center = cam.ViewportSize / 2
+    local bestPos, bestDist = nil, Settings.FOV
+    for char, folder in pairs(ClientHitboxes.folders) do
+        local head = folder.Parent and folder:FindFirstChild("Head")
+        local hum = typeof(char) == "Instance" and char ~= LocalPlayer.Character and char:FindFirstChildOfClass("Humanoid")
+        if head and hum and hum.Health > 0 and char:GetAttribute("Downed") ~= true then
+            local isTeammate = false
+            local plr = Players:GetPlayerFromCharacter(char)
+            if Settings.TeamCheck and plr and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then isTeammate = true end
+            if not isTeammate then
+                local sp, onScreen = cam:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local dist = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                    if dist < bestDist then bestPos, bestDist = head.Position, dist end
+                end
+            end
+        end
+    end
+    return bestPos
+end
+
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    if not checkcaller() and getnamecallmethod() == "ViewportPointToRay" and rawequal(self, workspace.CurrentCamera) then
+        local ray = oldNamecall(self, ...)
+        if Settings.SilentAim then
+            local ok, scr = pcall(getcallingscript)
+            if ok and scr and scr.Name == "WeaponClient" then
+                local ok2, pos = pcall(GetSilentAimTarget)
+                if ok2 and pos then return Ray.new(ray.Origin, (pos - ray.Origin).Unit) end
+            end
+        end
+        return ray
+    end
+    return oldNamecall(self, ...)
+end))
+
+-- =====================================================================
+-- INFINITE STAMINA
+-- =====================================================================
+local staminaClientState = nil
+pcall(function()
+    local Weapons = ReplicatedStorage:WaitForChild("Weapons", 5)
+    if Weapons then
+        local ok, mod = pcall(require, Weapons:WaitForChild("ClientState", 5))
+        if ok then staminaClientState = mod end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if not Settings.InfStamina then return end
+    if staminaClientState and staminaClientState.Stamina ~= nil and staminaClientState.StaminaMax ~= nil then
+        staminaClientState.Stamina = staminaClientState.StaminaMax
+    end
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        local globalGui = pg:FindFirstChild("GlobalGui")
+        if globalGui then
+            local topRight = globalGui:FindFirstChild("TopRight")
+            if topRight then
+                local stamUI = topRight:FindFirstChild("Stamina")
+                if stamUI and (stamUI:IsA("NumberValue") or stamUI:IsA("IntValue")) then
+                    stamUI.Value = 150
+                end
+            end
+        end
+    end
+end)
+
+-- =====================================================================
+-- SPIN KARAKTER
+-- =====================================================================
+local function applySpin(char)
+    if not Settings.SpinChar then return end
+    local hrp = char:WaitForChild("HumanoidRootPart", 5)
+    if not hrp then return end
+    if not hrp:FindFirstChild("DARKHUB_SPIN") then
+        local bav = Instance.new("BodyAngularVelocity")
+        bav.Name = "DARKHUB_SPIN"
+        bav.AngularVelocity = Vector3.new(0, 20, 0)
+        bav.MaxTorque = Vector3.new(0, math.huge, 0)
+        bav.P = 100000
+        bav.Parent = hrp
+    end
+end
+
+local function removeSpin(char)
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local existing = hrp:FindFirstChild("DARKHUB_SPIN")
+    if existing then existing:Destroy() end
+end
+
+-- =====================================================================
+-- NOCLIP
+-- =====================================================================
+RunService.Stepped:Connect(function()
+    if not Settings.Noclip then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    for _, v in ipairs(char:GetDescendants()) do
+        if v:IsA("BasePart") then
+            v.CanCollide = false
+        end
+    end
+end)
+
+-- =====================================================================
+-- SPEEDHACK (TOGGLE + SLIDER)
+-- =====================================================================
+local function applySpeed()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if Settings.SpeedHack then
+        hum.WalkSpeed = Settings.WalkSpeed
+    else
+        hum.WalkSpeed = 16 -- default Roblox
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(1)
+    applySpeed()
+    applySpin(char)
+end)
+if LocalPlayer.Character then
+    applySpeed()
+    applySpin(LocalPlayer.Character)
+end
+
+-- =====================================================================
+-- WEAPON MODS (KODE ASLI)
+-- =====================================================================
+local cachedRecoil = {}
+local cachedBloom = {}
+local lastTool = nil
+
+local function cacheWeapons()
+    cachedRecoil, cachedBloom = {}, {}
+    print("=== DARK HUB WEAPON MODS STARTED ===")
+    for _, fn in ipairs(getgc(true)) do
+        if type(fn) == "function" then
+            local ok, ups = pcall(debug.getupvalues, fn)
+            if ok and type(ups) == "table" then
+                for _, tbl in pairs(ups) do
+                    if type(tbl) == "table" then
+                        pcall(function()
+                            if type(tbl.Recoil) == "table" then
+                                if setreadonly then setreadonly(tbl.Recoil, false) end
+                                table.insert(cachedRecoil, tbl.Recoil)
+                            end
+                            if type(tbl.Bloom) == "table" then
+                                if setreadonly then setreadonly(tbl.Bloom, false) end
+                                table.insert(cachedBloom, tbl.Bloom)
+                            end
+                        end)
+                    end
+                end
+            end
+        end
+    end
+    print("Berhasil mengunci " .. (#cachedRecoil + #cachedBloom) .. " tabel Recoil/Spread.")
+end
+
+RunService.RenderStepped:Connect(function()
+    if Settings.NoRecoil then
+        for i = 1, #cachedRecoil do
+            local r = cachedRecoil[i]
+            pcall(function() for k, v in pairs(r) do if type(v) == "number" then r[k] = 0 end end end)
+        end
+    end
+    if Settings.NoSpread then
+        for i = 1, #cachedBloom do
+            local b = cachedBloom[i]
+            pcall(function() for k, v in pairs(b) do if type(v) == "number" then b[k] = 0 end end end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.5) do
+        local char = LocalPlayer.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool and tool ~= lastTool then
+            lastTool = tool
+            task.wait(0.2)
+            cacheWeapons()
+        end
+    end
+end)
+
+-- =====================================================================
+-- ANTI LAG
+-- =====================================================================
+local PerfBackup = { Fog = {}, Textures = {}, Materials = {}, Shadows = {}, Particles = {}, Lights = {} }
+
+local function setShadow(enabled)
+    if enabled then
+        Lighting.GlobalShadows = false; Lighting.ShadowSoftness = 0
+        local count = 0
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            count = count + 1; if count % 200 == 0 then task.wait() end
+            if obj:IsA("BasePart") then
+                if PerfBackup.Shadows[obj] == nil then PerfBackup.Shadows[obj] = obj.CastShadow end
+                pcall(function() obj.CastShadow = false end)
+            end
+        end
+    else
+        Lighting.GlobalShadows = true; Lighting.ShadowSoftness = 0.2
+        for obj, orig in pairs(PerfBackup.Shadows) do if obj and obj.Parent then pcall(function() obj.CastShadow = orig end) end end
+        table.clear(PerfBackup.Shadows)
+    end
+end
+
+local function setFog(enabled)
+    if enabled then
+        PerfBackup.Fog.End = Lighting.FogEnd; PerfBackup.Fog.Start = Lighting.FogStart; PerfBackup.Fog.Color = Lighting.FogColor
+        Lighting.FogEnd = 9e9; Lighting.FogStart = 0
+        for _, v in ipairs(Lighting:GetDescendants()) do if v:IsA("Atmosphere") then pcall(function() v.Enabled = false; v.Parent = nil end) end end
+    else
+        if PerfBackup.Fog.End then Lighting.FogEnd = PerfBackup.Fog.End; Lighting.FogStart = PerfBackup.Fog.Start; Lighting.FogColor = PerfBackup.Fog.Color end
+    end
+end
+
+local function setParticles(enabled)
+    local count = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        count = count + 1; if count % 200 == 0 then task.wait() end
+        if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") or obj:IsA("Trail") or obj:IsA("Beam") then
+            if enabled then
+                if PerfBackup.Particles[obj] == nil then PerfBackup.Particles[obj] = obj.Enabled end
+                pcall(function() obj.Enabled = false end)
+            else
+                if PerfBackup.Particles[obj] ~= nil then pcall(function() obj.Enabled = PerfBackup.Particles[obj] end) end
+            end
+        end
+    end
+    if not enabled then table.clear(PerfBackup.Particles) end
+end
+
+local function setTextures(enabled)
+    local count = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        count = count + 1; if count % 200 == 0 then task.wait() end
+        if obj:IsA("Decal") or obj:IsA("Texture") then
+            if enabled then
+                if PerfBackup.Textures[obj] == nil then PerfBackup.Textures[obj] = obj.Transparency end
+                obj.Transparency = 1
+            else
+                if PerfBackup.Textures[obj] ~= nil then obj.Transparency = PerfBackup.Textures[obj] end
+            end
+        end
+    end
+    if not enabled then table.clear(PerfBackup.Textures) end
+end
+
+local function setLights(enabled)
+    local count = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        count = count + 1; if count % 200 == 0 then task.wait() end
+        if obj:IsA("PointLight") or obj:IsA("SpotLight") or obj:IsA("SurfaceLight") then
+            if enabled then
+                if PerfBackup.Lights[obj] == nil then PerfBackup.Lights[obj] = obj.Enabled end
+                pcall(function() obj.Enabled = false end)
+            else
+                if PerfBackup.Lights[obj] ~= nil then pcall(function() obj.Enabled = PerfBackup.Lights[obj] end) end
+            end
+        end
+    end
+    if not enabled then table.clear(PerfBackup.Lights) end
+end
+
+local function setSmoothPlastic(enabled)
+    local count = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        count = count + 1; if count % 200 == 0 then task.wait() end
+        if obj:IsA("BasePart") then
+            if enabled then
+                if PerfBackup.Materials[obj] == nil then PerfBackup.Materials[obj] = obj.Material end
+                obj.Material = Enum.Material.SmoothPlastic
+            else
+                if PerfBackup.Materials[obj] ~= nil then obj.Material = PerfBackup.Materials[obj] end
+            end
+        end
+    end
+    if not enabled then table.clear(PerfBackup.Materials) end
+end
+
+local function setNuclear(enabled)
+    setShadow(enabled); setFog(enabled); setParticles(enabled); setTextures(enabled); setLights(enabled); setSmoothPlastic(enabled)
+    if enabled then
+        Lighting.EnvironmentDiffuseScale = 0; Lighting.EnvironmentSpecularScale = 0; Lighting.Outlines = false; Lighting.Brightness = 1
+    else
+        Lighting.EnvironmentDiffuseScale = 1; Lighting.EnvironmentSpecularScale = 1; Lighting.Outlines = true; Lighting.Brightness = 2
+    end
+end
+
+-- =====================================================================
+-- ESP SYSTEM
+-- =====================================================================
+local bonesR15 = {
+    {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},{"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
+    {"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},{"LowerTorso","LeftUpperLeg"},
+    {"LeftUpperLeg","LeftLowerLeg"},{"LeftLowerLeg","LeftFoot"},{"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"}
+}
+local bonesR6 = {{"Head","Torso"},{"Torso","Left Arm"},{"Torso","Right Arm"},{"Torso","Left Leg"},{"Torso","Right Leg"}}
+
+local espCache = {}
+local function CreateESP(plr)
+    if plr == LocalPlayer or espCache[plr] then return end
+    local box = {}
+    for i = 1, 4 do local l = Drawing.new("Line"); l.Thickness = 1; l.Visible = false; table.insert(box, l) end
+    local skel = {}
+    for i = 1, 15 do local l = Drawing.new("Line"); l.Thickness = 2; l.Visible = false; table.insert(skel, l) end
+    local hbg = Drawing.new("Line"); hbg.Thickness = 2; hbg.Color = Color3.new(0,0,0); hbg.Visible = false
+    local hbar = Drawing.new("Line"); hbar.Thickness = 2; hbar.Color = Color3.fromRGB(0,255,0); hbar.Visible = false
+    local trk = Drawing.new("Line"); trk.Thickness = 1.5; trk.Visible = false
+    local nm = Drawing.new("Text"); nm.Size = 14; nm.Center = true; nm.Outline = true; nm.Visible = false
+    local dst = Drawing.new("Text"); dst.Size = 12; dst.Center = true; dst.Outline = true; dst.Visible = false
+    local dot = Drawing.new("Circle"); dot.Radius = 4; dot.Filled = true; dot.Visible = false
+    espCache[plr] = { Box = box, Skeleton = skel, HBg = hbg, HBar = hbar, Track = trk, Name = nm, Dist = dst, Dot = dot }
+end
+
+local function RemoveESP(plr)
+    if espCache[plr] then
+        for _, l in pairs(espCache[plr].Box) do pcall(l.Remove, l) end
+        for _, l in pairs(espCache[plr].Skeleton) do pcall(l.Remove, l) end
+        pcall(espCache[plr].HBg.Remove, espCache[plr].HBg); pcall(espCache[plr].HBar.Remove, espCache[plr].HBar)
+        pcall(espCache[plr].Track.Remove, espCache[plr].Track); pcall(espCache[plr].Name.Remove, espCache[plr].Name)
+        pcall(espCache[plr].Dist.Remove, espCache[plr].Dist); pcall(espCache[plr].Dot.Remove, espCache[plr].Dot)
+        espCache[plr] = nil
+    end
+    if plr.Character and plr.Character:FindFirstChild("DARKHUB_HL") then plr.Character.DARKHUB_HL:Destroy() end
+end
+
+for _, p in pairs(Players:GetPlayers()) do CreateESP(p) end
+Players.PlayerAdded:Connect(CreateESP)
+Players.PlayerRemoving:Connect(RemoveESP)
+
+local function hideAll(cache)
+    for _, l in pairs(cache.Box) do l.Visible = false end
+    for _, l in pairs(cache.Skeleton) do l.Visible = false end
+    cache.HBg.Visible = false; cache.HBar.Visible = false; cache.Track.Visible = false; cache.Name.Visible = false; cache.Dist.Visible = false; cache.Dot.Visible = false
+end
+
+task.spawn(function()
+    while task.wait(0.05) do
+        if not Settings.ESP_Enabled then
+            for plr, cache in pairs(espCache) do
+                hideAll(cache)
+                if plr.Character and plr.Character:FindFirstChild("DARKHUB_HL") then plr.Character.DARKHUB_HL:Destroy() end
+            end
+            continue
+        end
+        local cam = Workspace.CurrentCamera; if not cam then continue end
+        local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+        for plr, cache in pairs(espCache) do
+            local char = plr.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local hrp = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
+            local head = char and char:FindFirstChild("Head")
+            local isTeammate = false
+            if Settings.TeamCheck and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then isTeammate = true end
+            local skip = false
+            if isTeammate or not char or not hum or hum.Health <= 0 or not hrp or not head then skip = true
+            else
+                local d = (cam.CFrame.Position - hrp.Position).Magnitude
+                if d > Settings.MaxESPDistance then skip = true end
+            end
+            if skip then
+                hideAll(cache)
+                if char and char:FindFirstChild("DARKHUB_HL") then char.DARKHUB_HL:Destroy() end
+                continue
+            end
+            local dist = (cam.CFrame.Position - hrp.Position).Magnitude
+            local hPos, onScreen = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+            local fPos = cam:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+            local espColor = Settings.ESPColor
+            if onScreen then
+                local height = math.abs(hPos.Y - fPos.Y); local width = height / 2
+                if Settings.ESP_Box then
+                    cache.Box[1].From = Vector2.new(hPos.X - width/2, hPos.Y); cache.Box[1].To = Vector2.new(hPos.X + width/2, hPos.Y); cache.Box[1].Visible = true; cache.Box[1].Color = espColor
+                    cache.Box[2].From = Vector2.new(hPos.X + width/2, hPos.Y); cache.Box[2].To = Vector2.new(hPos.X + width/2, fPos.Y); cache.Box[2].Visible = true; cache.Box[2].Color = espColor
+                    cache.Box[3].From = Vector2.new(hPos.X + width/2, fPos.Y); cache.Box[3].To = Vector2.new(hPos.X - width/2, fPos.Y); cache.Box[3].Visible = true; cache.Box[3].Color = espColor
+                    cache.Box[4].From = Vector2.new(hPos.X - width/2, fPos.Y); cache.Box[4].To = Vector2.new(hPos.X - width/2, hPos.Y); cache.Box[4].Visible = true; cache.Box[4].Color = espColor
+                else for _, l in pairs(cache.Box) do l.Visible = false end end
+                if Settings.ESP_Skeleton then
+                    local useBones = (char:FindFirstChild("Torso") and not char:FindFirstChild("UpperTorso")) and bonesR6 or bonesR15
+                    for i, bone in pairs(useBones) do
+                        local p1 = char:FindFirstChild(bone[1]); local p2 = char:FindFirstChild(bone[2])
+                        if p1 and p2 and cache.Skeleton[i] then
+                            local s1, o1 = cam:WorldToViewportPoint(p1.Position); local s2, o2 = cam:WorldToViewportPoint(p2.Position)
+                            if o1 and o2 then
+                                cache.Skeleton[i].From = Vector2.new(s1.X, s1.Y); cache.Skeleton[i].To = Vector2.new(s2.X, s2.Y); cache.Skeleton[i].Color = espColor; cache.Skeleton[i].Visible = true
+                            else cache.Skeleton[i].Visible = false end
+                        elseif cache.Skeleton[i] then cache.Skeleton[i].Visible = false end
+                    end
+                    for i = #useBones + 1, #cache.Skeleton do if cache.Skeleton[i] then cache.Skeleton[i].Visible = false end end
+                else for _, l in pairs(cache.Skeleton) do l.Visible = false end end
+                if Settings.ESP_Health then
+                    local pct = hum.Health / hum.MaxHealth; local bx = hPos.X - (width/2) - 5
+                    cache.HBg.From = Vector2.new(bx, hPos.Y); cache.HBg.To = Vector2.new(bx, fPos.Y); cache.HBg.Visible = true
+                    cache.HBar.From = Vector2.new(bx, fPos.Y - (height * pct)); cache.HBar.To = Vector2.new(bx, fPos.Y); cache.HBar.Visible = true
+                    cache.HBar.Color = Color3.fromRGB(255 * (1-pct), 255 * pct, 0)
+                else cache.HBg.Visible = false; cache.HBar.Visible = false end
+                if Settings.ESP_Name then cache.Name.Text = plr.Name; cache.Name.Position = Vector2.new(hPos.X, hPos.Y - 20); cache.Name.Visible = true; cache.Name.Color = Color3.new(1,1,1)
+                else cache.Name.Visible = false end
+                if Settings.ESP_Distance then cache.Dist.Text = math.floor(dist) .. "m"; cache.Dist.Position = Vector2.new(hPos.X, fPos.Y + 10); cache.Dist.Visible = true; cache.Dist.Color = espColor
+                else cache.Dist.Visible = false end
+                if Settings.ESP_Tracker then cache.Track.From = center; cache.Track.To = Vector2.new(hPos.X, hPos.Y); cache.Track.Visible = true; cache.Track.Color = espColor
+                else cache.Track.Visible = false end
+                if Settings.ESP_RedDot then cache.Dot.Position = Vector2.new(hPos.X, hPos.Y); cache.Dot.Visible = true; cache.Dot.Color = Color3.fromRGB(255, 0, 0)
+                else cache.Dot.Visible = false end
+            else hideAll(cache) end
+            if Settings.ESP_Highlight then
+                local hl = char:FindFirstChild("DARKHUB_HL")
+                if not hl then hl = Instance.new("Highlight"); hl.Name = "DARKHUB_HL"; hl.Parent = char; hl.FillTransparency = 0.5; hl.OutlineTransparency = 0; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end
+                hl.FillColor = espColor; hl.OutlineColor = espColor
+            else
+                local hl = char:FindFirstChild("DARKHUB_HL")
+                if hl then hl:Destroy() end
+            end
+        end
+    end
+end)
+
+-- =====================================================================
+-- UI BUILDING
+-- =====================================================================
+
+-- ============ MAIN TAB ============
+-- Section: Character
+MainTab:AddLabel("CHARACTER", "user")
+MainTab:AddToggle({
+    Title = "Infinite Stamina",
+    Subtitle = "Bypass ClientState V2",
+    Icon = "battery-charging",
+    Default = false,
+    Callback = function(v)
+        Settings.InfStamina = v
+        Window:Notify({ Title = "Infinite Stamina", Text = v and "Enabled" or "Disabled",
+            Icon = v and "battery-charging" or "battery", Duration = 2 })
+    end
+})
+MainTab:AddToggle({
+    Title = "Spin Karakter",
+    Subtitle = "Karakter berputar otomatis",
+    Icon = "rotate-cw",
+    Default = false,
+    Callback = function(v)
+        Settings.SpinChar = v
+        local char = LocalPlayer.Character
+        if v then if char then applySpin(char) end
+        else if char then removeSpin(char) end end
+        Window:Notify({ Title = "Spin Karakter", Text = v and "Enabled" or "Disabled",
+            Icon = "rotate-cw", Duration = 2 })
+    end
+})
+
+MainTab:AddSeparator()
+
+-- Section: Movement
+MainTab:AddLabel("MOVEMENT", "move")
+MainTab:AddToggle({
+    Title = "Noclip",
+    Subtitle = "Tembus dinding & objek",
+    Icon = "ghost",
+    Default = false,
+    Callback = function(v) Settings.Noclip = v end
+})
+MainTab:AddToggle({
+    Title = "Speedhack",
+    Subtitle = "Aktifkan untuk mengubah WalkSpeed",
+    Icon = "zap",
+    Default = false,
+    Callback = function(v)
+        Settings.SpeedHack = v
+        applySpeed()
+        Window:Notify({ Title = "Speedhack", Text = v and "Enabled" or "Disabled",
+            Icon = "zap", Duration = 2 })
+    end
+})
+MainTab:AddSlider({
+    Title = "Speed Value",
+    Subtitle = "Hanya berlaku saat Speedhack ON",
+    Icon = "activity",
+    Min = 16, Max = 300, Default = 16,
+    Callback = function(v)
+        Settings.WalkSpeed = v
+        if Settings.SpeedHack then applySpeed() end
+    end
+})
+
+MainTab:AddSeparator()
+
+-- Section: Community
+MainTab:AddLabel("COMMUNITY", "users")
+MainTab:AddButton({
+    Title = "Join Discord",
+    Subtitle = "https://discord.gg/dark-hub-1427252148416024632",
+    Icon = "message-circle",
+    Text = "Copy Link",
+    Callback = function()
+        if setclipboard then
+            setclipboard(DISCORD_URL)
+            Window:Notify({ Title = "Discord", Text = "Link copied! Paste di browser.", Icon = "check", Duration = 4 })
+        else
+            Window:Notify({ Title = "Discord", Text = DISCORD_URL, Icon = "info", Duration = 6 })
+        end
+    end
+})
+
+-- ============ COMBAT TAB ============
+CombatTab:AddLabel("AIMBOT", "target")
+CombatTab:AddToggle({ Title = "Enable Aimbot", Subtitle = "CFrame Camera Lock", Icon = "target", Default = false, Callback = function(v) Settings.Aimbot = v end })
+CombatTab:AddToggle({ Title = "Aim on RMB", Subtitle = "Hold right click to aim", Icon = "mouse-pointer", Default = false, Callback = function(v) Settings.AimbotRMB = v end })
+CombatTab:AddToggle({ Title = "Visible Check", Subtitle = "Wall check before aim", Icon = "eye", Default = true, Callback = function(v) Settings.AimbotVis = v end })
+CombatTab:AddSlider({ Title = "Aimbot Smoothness", Icon = "activity", Min = 1, Max = 15, Default = 5, Callback = function(v) Settings.AimbotSmooth = v end })
+CombatTab:AddDropdown({ Title = "Target Bone", Icon = "crosshair", Options = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"}, Default = "Head", Callback = function(v) Settings.AimbotBone = v end })
+
+CombatTab:AddSeparator()
+CombatTab:AddLabel("SILENT AIM", "zap")
+CombatTab:AddToggle({ Title = "Enable Silent Aim", Subtitle = "Redirects hitbox", Icon = "zap", Default = false, Callback = function(v) Settings.SilentAim = v end })
+CombatTab:AddToggle({ Title = "Team Check", Icon = "users", Default = true, Callback = function(v) Settings.TeamCheck = v end })
+CombatTab:AddSlider({ Title = "FOV Radius", Icon = "circle", Min = 10, Max = 500, Default = 120, Callback = function(v) Settings.FOV = v; Circle.Radius = v end })
+CombatTab:AddColorPicker({ Title = "FOV Color", Icon = "palette", Default = Color3.fromRGB(255, 140, 0), Callback = function(c) Settings.ESPColor = c; Circle.Color = c end })
+
+-- ============ VISUAL TAB ============
+VisualTab:AddLabel("ESP ELEMENTS", "eye")
+VisualTab:AddToggle({ Title = "Enable ESP", Subtitle = "Master toggle", Icon = "eye", Default = false, Callback = function(v) Settings.ESP_Enabled = v end })
+VisualTab:AddToggle({ Title = "Box ESP", Icon = "box", Default = false, Callback = function(v) Settings.ESP_Box = v end })
+VisualTab:AddToggle({ Title = "Skeleton ESP", Icon = "git-branch", Default = false, Callback = function(v) Settings.ESP_Skeleton = v end })
+VisualTab:AddToggle({ Title = "Health Bar", Icon = "heart", Default = false, Callback = function(v) Settings.ESP_Health = v end })
+VisualTab:AddToggle({ Title = "Name ESP", Icon = "tag", Default = false, Callback = function(v) Settings.ESP_Name = v end })
+VisualTab:AddToggle({ Title = "Distance", Icon = "map-pin", Default = false, Callback = function(v) Settings.ESP_Distance = v end })
+VisualTab:AddToggle({ Title = "Tracer Line", Icon = "activity", Default = false, Callback = function(v) Settings.ESP_Tracker = v end })
+VisualTab:AddToggle({ Title = "Red Dot", Icon = "circle", Default = false, Callback = function(v) Settings.ESP_RedDot = v end })
+VisualTab:AddToggle({ Title = "Highlight", Icon = "sun", Default = false, Callback = function(v) Settings.ESP_Highlight = v end })
+
+VisualTab:AddSeparator()
+VisualTab:AddLabel("CUSTOMIZATION", "palette")
+VisualTab:AddColorPicker({ Title = "ESP Color", Icon = "palette", Default = Color3.fromRGB(255, 140, 0), Callback = function(c) Settings.ESPColor = c end })
+VisualTab:AddSlider({ Title = "Max Distance", Icon = "maximize", Min = 50, Max = 2000, Default = 1500, Callback = function(v) Settings.MaxESPDistance = v end })
+
+-- ============ WEAPON TAB ============
+WeaponTab:AddLabel("RECOIL & SPREAD", "crosshair")
+WeaponTab:AddToggle({
+    Title = "No Recoil", Subtitle = "Removes camera kick", Icon = "crosshair", Default = false,
+    Callback = function(v)
+        Settings.NoRecoil = v
+        if v and #cachedRecoil == 0 then cacheWeapons() end
+    end
+})
+WeaponTab:AddToggle({
+    Title = "No Spread", Subtitle = "Removes bullet bloom", Icon = "target", Default = false,
+    Callback = function(v)
+        Settings.NoSpread = v
+        if v and #cachedBloom == 0 then cacheWeapons() end
+    end
+})
+
+-- ============ ANTI LAG TAB ============
+AntiLagTab:AddLabel("MASTER", "zap")
+AntiLagTab:AddToggle({ Title = "Nuclear FPS Boost", Subtitle = "Toggle semua di bawah", Icon = "zap", Default = false, Callback = function(v) Settings.PerfNuclear = v; setNuclear(v) end })
+
+AntiLagTab:AddSeparator()
+AntiLagTab:AddLabel("INDIVIDUAL", "settings")
+AntiLagTab:AddToggle({ Title = "Disable Shadows", Icon = "sun", Default = false, Callback = function(v) Settings.PerfShadow = v; setShadow(v) end })
+AntiLagTab:AddToggle({ Title = "Remove Fog", Icon = "cloud", Default = false, Callback = function(v) Settings.PerfFog = v; setFog(v) end })
+AntiLagTab:AddToggle({ Title = "Disable Particles", Icon = "sparkles", Default = false, Callback = function(v) Settings.PerfParticles = v; setParticles(v) end })
+AntiLagTab:AddToggle({ Title = "Hide Textures", Icon = "image", Default = false, Callback = function(v) Settings.PerfTexture = v; setTextures(v) end })
+AntiLagTab:AddToggle({ Title = "Disable Lights", Icon = "lightbulb", Default = false, Callback = function(v) Settings.PerfLights = v; setLights(v) end })
+AntiLagTab:AddToggle({ Title = "SmoothPlastic Material", Icon = "box", Default = false, Callback = function(v) Settings.PerfPlastic = v; setSmoothPlastic(v) end })
+
+-- ============ SETTINGS TAB (BAWAAN VANTIXUI) ============
+local themeNames = {}
+for name in pairs(VantixUI.Themes) do
+    table.insert(themeNames, name)
+end
+table.sort(themeNames)
+
+SettingsTab:AddLabel("APPEARANCE", "palette")
+SettingsTab:AddDropdown({
+    Title = "Theme",
+    Subtitle = "Ganti tema UI",
+    Icon = "swatch-book",
+    Options = themeNames,
+    Default = Window:GetTheme(),
+    Callback = function(selected) Window:SetTheme(selected) end,
+})
+
+SettingsTab:AddDropdown({
+    Title = "Accent Color",
+    Subtitle = "Warna aksen UI",
+    Icon = "droplet",
+    Options = {"White", "Blue", "Red", "Green", "Purple", "Orange", "Cyan", "Pink"},
+    Default = "Blue",
+    Callback = function(selected)
+        local colors = {
+            White  = Color3.fromRGB(255, 255, 255),
+            Blue   = Color3.fromRGB(64, 156, 255),
+            Red    = Color3.fromRGB(230, 70, 70),
+            Green  = Color3.fromRGB(80, 210, 120),
+            Purple = Color3.fromRGB(170, 110, 240),
+            Orange = Color3.fromRGB(255, 140, 60),
+            Cyan   = Color3.fromRGB(50, 220, 220),
+            Pink   = Color3.fromRGB(240, 100, 180),
+        }
+        VantixUI:SetAccentColor(colors[selected] or colors.White)
+    end,
+})
+
+SettingsTab:AddSeparator()
+SettingsTab:AddLabel("WINDOW CONTROL", "layout")
+SettingsTab:AddKeybind({
+    Title = "Hide UI Keybind",
+    Subtitle = "Tombol untuk hide/show window",
+    Icon = "keyboard",
+    Default = Enum.KeyCode.Insert,
+    Callback = function()
+        local sg = Window.Gui
+        if sg then sg.Enabled = not sg.Enabled end
+    end,
+})
+
+SettingsTab:AddButton({ Title = "Minimize Window", Icon = "minus", Text = "Minimize", Callback = function() Window:Minimize() end })
+SettingsTab:AddButton({ Title = "Restore Window", Icon = "square", Text = "Restore", Callback = function() Window:Restore() end })
+SettingsTab:AddButton({ Title = "Toggle Window", Icon = "repeat", Text = "Toggle", Callback = function() Window:Toggle() end })
+
+SettingsTab:AddSeparator()
+SettingsTab:AddLabel("COMMUNITY", "users")
+SettingsTab:AddButton({
+    Title = "Join Discord",
+    Subtitle = "discord.gg/dark-hub-1427252148416024632",
+    Icon = "message-circle",
+    Text = "Copy Link",
+    Callback = function()
+        if setclipboard then
+            setclipboard(DISCORD_URL)
+            Window:Notify({ Title = "Discord", Text = "Link copied!", Icon = "check", Duration = 3 })
+        else
+            Window:Notify({ Title = "Discord", Text = DISCORD_URL, Icon = "info", Duration = 6 })
+        end
+    end,
+})
+
+SettingsTab:AddSeparator()
+SettingsTab:AddButton({
+    Title = "Unload UI",
+    Subtitle = "Hapus semua elemen DARK HUB",
+    Icon = "log-out",
+    Text = "Unload",
+    Callback = function() Window:Destroy() end,
+})
+
+-- =====================================================================
+-- LIVE STATS PANEL
+-- =====================================================================
+local StatsPanel
+pcall(function()
+    StatsPanel = VantixUI:CreateNewWindow({
+        Title = "Live Stats",
+        Name = "DARKHUBStats",
+        Size = {240},
+        Minimizable = true,
+        Position = UDim2.new(0, 20, 0, 88),
+    })
+
+    StatsPanel:AddHeader("Session")
+    local fpsRow = StatsPanel:AddRow("FPS")
+    local pingRow = StatsPanel:AddRow("Ping")
+    local statusRow = StatsPanel:AddRow("Status")
+    StatsPanel:AddSeparator()
+    StatsPanel:AddHeader("Player")
+    local posRow = StatsPanel:AddRow("Position")
+    StatsPanel:AddRow("Name"):Set(LocalPlayer.Name)
+
+    task.spawn(function()
+        local Stats = game:GetService("Stats")
+        local frames, last = 0, os.clock()
+        while StatsPanel and StatsPanel.Card and StatsPanel.Card.Parent do
+            frames = frames + 1
+            local now = os.clock()
+            if now - last >= 1 then
+                fpsRow:Set(frames)
+                frames, last = 0, now
+            end
+            local ok, ping = pcall(function()
+                return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+            end)
+            if ok then pingRow:Set(string.format("%d ms", ping)) end
+            local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                local p = root.Position
+                posRow:Set(string.format("%d, %d, %d", p.X, p.Y, p.Z))
+            end
+            local active = 0
+            for _, v in pairs(Settings) do
+                if type(v) == "boolean" and v == true then active = active + 1 end
+            end
+            statusRow:Set(active .. " fitur aktif")
+            RunService.Heartbeat:Wait()
+        end
+    end)
+end)
+
+print("[DARK HUB] v15 Loaded — Clean Edition")
+print("[DARK HUB] Discord: " .. DISCORD_URL)
